@@ -1,16 +1,15 @@
 module.exports = {
   dependencies: {
-    // Broken native build — replaced with react-native-webview in JS
+    // Replaced with react-native-webview for online streaming
     'react-native-video': {
       platforms: { android: null },
     },
-    // No longer used in JS — replaced with WebView + Google Docs Viewer
+    // Replaced with react-native-file-viewer for local files
     'react-native-pdf': {
       platforms: { android: null },
     },
-    'react-native-fs': {
-      platforms: { android: null },
-    },
+    // Enabled: used for offline file downloads
+    // 'react-native-fs': { platforms: { android: null } },
     'react-native-blob-util': {
       platforms: { android: null },
     },

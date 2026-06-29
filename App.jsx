@@ -13,6 +13,7 @@ import {
   ActivityIndicator,
 } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { getCachedList, saveCachedList } from './src/utils/offlineCache';
 import DeviceInfo from 'react-native-device-info';
 import LanguageSelection from './src/components/LanguageSelection/LanguageSelection';
 import ClassSelection from './src/components/ClassSelection/ClassSelection';
@@ -60,10 +61,20 @@ export default function App() {
         setShowModal(false);
       }
 
-      const fetchClasses = await fetch(
-        'https://iqsharp.arvinfocom.com/eduapiapp/api/main/getClassList?page=1&limit=100',
-      );
-      setClassData(await fetchClasses.json());
+      // Show cached class list immediately so UI is usable offline
+      const cachedClasses = await getCachedList('@edu_class_list');
+      if (cachedClasses) setClassData(cachedClasses);
+
+      try {
+        const fetchClasses = await fetch(
+          'https://iqsharp.arvinfocom.com/eduapiapp/api/main/getClassList?page=1&limit=100',
+        );
+        const classJson = await fetchClasses.json();
+        setClassData(classJson);
+        await saveCachedList('@edu_class_list', classJson);
+      } catch {
+        // Cache already applied above
+      }
     };
     loadData();
   }, []);
@@ -73,14 +84,25 @@ export default function App() {
     const fetchSubjects = async () => {
       if (step === 3 && selections.language && selections.class) {
         setSubjectLoading(true);
+        const subjectKey = `@edu_subjects_${selections.language}_${selections.class}`;
+
+        // Show cached subjects immediately — no waiting for network
+        const cached = await getCachedList(subjectKey);
+        if (cached) {
+          setSubjectData(cached);
+          setSubjectLoading(false);
+        }
+
+        // Refresh from network in background; update if successful
         try {
           const response = await fetch(
             `https://iqsharp.arvinfocom.com/eduapiapp/api/main/getSubjects?lang=${selections.language}&classid=${selections.class}&page=1&limit=100`,
           );
           const data = await response.json();
           setSubjectData(data);
-        } catch (error) {
-          setSubjectData({ data: [] });
+          await saveCachedList(subjectKey, data);
+        } catch {
+          if (!cached) setSubjectData({ data: [] });
         } finally {
           setSubjectLoading(false);
         }
@@ -119,6 +141,8 @@ export default function App() {
         setError(data.message || 'Invalid credentials');
         setShowModal(true);
       } else {
+        await AsyncStorage.setItem('schoolId', schoolId);
+        await AsyncStorage.setItem('apiKey', apiKey);
         setShowModal(false);
       }
     } catch (err) {

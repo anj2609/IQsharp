@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import {
   View,
   Text,
@@ -12,6 +12,13 @@ import {
   Dimensions,
 } from 'react-native';
 import { WebView } from 'react-native-webview';
+import FileViewer from 'react-native-file-viewer';
+import {
+  getCachedList,
+  saveCachedList,
+  getLocalPath,
+  downloadFile,
+} from '../../utils/offlineCache';
 
 const { width, height } = Dimensions.get('window');
 
@@ -56,33 +63,70 @@ const VideoThumbnail = ({ uri, videoUri, onPress }) => {
 export default function VideoListScreen({ className, subjectName, language }) {
   const [videos, setVideos] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [isOffline, setIsOffline] = useState(false);
   const [activeVideo, setActiveVideo] = useState(null);
+  const inProgress = useRef(new Set());
+
+  const cacheKey = `@edu_videos_${className}_${subjectName}_${language}`;
 
   useEffect(() => {
-    const fetchVideos = async () => {
+    const load = async () => {
       setLoading(true);
+      let items = null;
+      let offline = false;
+
+      // Serve cache immediately so offline users aren't stuck on a spinner
+      const cachedItems = await getCachedList(cacheKey);
+      if (cachedItems) {
+        items = cachedItems;
+        offline = true;
+        setVideos(items);
+        setIsOffline(true);
+        setLoading(false);
+      }
+
       try {
-        if (!className || !subjectName || !language)
-          throw new Error('Missing input');
+        if (!className || !subjectName || !language) throw new Error('Missing input');
         const url = `https://iqsharp.arvinfocom.com/eduapiapp/api/main/getVideos?class_id=${className}&subject_id=${subjectName}&lang=${language}`;
         const res = await fetch(url);
         const json = await res.json();
-        const data = json.data || [];
-        if (data.length > 0) {
-          console.log('[Video] sample video_url:', data[0].video_url);
-          console.log('[Video] sample thumbnail_url:', data[0].thumbnail_url);
-        } else {
-          console.log('[Video] API returned empty data');
-        }
-        setVideos(data);
+        items = json.data || [];
+        await saveCachedList(cacheKey, items);
+        offline = false;
       } catch {
-        setVideos([]);
-      } finally {
-        setLoading(false);
+        if (!cachedItems) items = null;
       }
+
+      setVideos(items || []);
+      setIsOffline(offline);
+      setLoading(false);
     };
-    fetchVideos();
+    load();
   }, [className, subjectName, language]);
+
+  const cacheInBackground = url => {
+    if (!url || inProgress.current.has(url)) return;
+    inProgress.current.add(url);
+    downloadFile(url)
+      .catch(() => {})
+      .finally(() => inProgress.current.delete(url));
+  };
+
+  const openVideo = async item => {
+    if (!item.video_url) {
+      setActiveVideo({ ...item, noUrl: true });
+      return;
+    }
+    const local = await getLocalPath(item.video_url);
+    if (local) {
+      FileViewer.open(local, { showOpenWithDialog: false }).catch(() =>
+        FileViewer.open(local, { showOpenWithDialog: true }),
+      );
+    } else {
+      setActiveVideo(item);
+      cacheInBackground(item.video_url);
+    }
+  };
 
   const renderItem = useCallback(
     ({ item }) => (
@@ -90,7 +134,7 @@ export default function VideoListScreen({ className, subjectName, language }) {
         <VideoThumbnail
           uri={item.thumbnail_url}
           videoUri={item.video_url}
-          onPress={() => setActiveVideo(item)}
+          onPress={() => openVideo(item)}
         />
         <View style={styles.cardText}>
           <Text style={styles.videoTitle} numberOfLines={2}>
@@ -105,8 +149,9 @@ export default function VideoListScreen({ className, subjectName, language }) {
     [],
   );
 
-  if (loading)
+  if (loading) {
     return <ActivityIndicator size="large" style={{ marginTop: 40 }} />;
+  }
 
   const hasVideoUrl = !!activeVideo?.video_url;
   const videoHtml = hasVideoUrl
@@ -116,6 +161,13 @@ export default function VideoListScreen({ className, subjectName, language }) {
   return (
     <View style={styles.container}>
       <Text style={styles.title}>Available Videos</Text>
+      {isOffline && (
+        <View style={styles.offlineBanner}>
+          <Text style={styles.offlineBannerText}>
+            You're offline — showing previously loaded content
+          </Text>
+        </View>
+      )}
       <FlatList
         data={videos}
         renderItem={renderItem}
@@ -152,22 +204,22 @@ export default function VideoListScreen({ className, subjectName, language }) {
                   </Text>
                 </View>
               ) : (
-              <WebView
-                source={{ html: videoHtml }}
-                style={styles.videoPlayer}
-                mediaPlaybackRequiresUserAction={false}
-                allowsInlineMediaPlayback
-                javaScriptEnabled
-                domStorageEnabled
-                allowsFullscreenVideo
-                originWhitelist={['*']}
-                startInLoadingState
-                renderLoading={() => (
-                  <View style={styles.webviewLoader}>
-                    <ActivityIndicator size="large" color="#007bff" />
-                  </View>
-                )}
-              />
+                <WebView
+                  source={{ html: videoHtml }}
+                  style={styles.videoPlayer}
+                  mediaPlaybackRequiresUserAction={false}
+                  allowsInlineMediaPlayback
+                  javaScriptEnabled
+                  domStorageEnabled
+                  allowsFullscreenVideo
+                  originWhitelist={['*']}
+                  startInLoadingState
+                  renderLoading={() => (
+                    <View style={styles.webviewLoader}>
+                      <ActivityIndicator size="large" color="#007bff" />
+                    </View>
+                  )}
+                />
               )}
             </>
           )}
@@ -185,6 +237,16 @@ const styles = StyleSheet.create({
     textAlign: 'center',
     marginBottom: 12,
   },
+  offlineBanner: {
+    backgroundColor: '#fff3cd',
+    borderLeftWidth: 4,
+    borderLeftColor: '#f59e0b',
+    marginHorizontal: 16,
+    marginBottom: 8,
+    padding: 10,
+    borderRadius: 6,
+  },
+  offlineBannerText: { fontSize: 12, color: '#92400e' },
   list: { paddingHorizontal: 16, paddingBottom: 40 },
   card: {
     backgroundColor: '#fff',
@@ -222,10 +284,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   playLabel: { color: '#fff', fontSize: 14, fontWeight: 'bold' },
-  cardText: {
-    flex: 1,
-    paddingLeft: 12,
-  },
+  cardText: { flex: 1, paddingLeft: 12 },
   videoTitle: {
     fontSize: 14,
     fontWeight: '600',
@@ -235,10 +294,7 @@ const styles = StyleSheet.create({
   videoDesc: { fontSize: 12, color: '#555' },
   emptyText: { textAlign: 'center', marginTop: 40, color: '#060505' },
   modalContainer: { flex: 1, backgroundColor: '#000' },
-  closeBtn: {
-    padding: 14,
-    alignSelf: 'flex-start',
-  },
+  closeBtn: { padding: 14, alignSelf: 'flex-start' },
   closeBtnText: { color: '#fff', fontSize: 16, fontWeight: '600' },
   modalTitle: {
     color: '#fff',

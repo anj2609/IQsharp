@@ -4,6 +4,7 @@ import OptionCard from '../OptionCard/OptionCard';
 import videoLogo from '../../../assets/video.jpeg';
 import pdfLogo from '../../../assets/pdf.jpeg';
 import quizLogo from '../../../assets/quiz.jpeg';
+import { getCachedList, saveCachedList } from '../../utils/offlineCache';
 
 const BASE = 'https://iqsharp.arvinfocom.com/eduapiapp/api/main';
 
@@ -46,23 +47,40 @@ export default function ContentTypeSelection({
 
     const checkAvailability = async () => {
       setLoading(true);
-      const results = await Promise.allSettled(
-        ALL_OPTIONS.map(opt =>
-          fetch(opt.endpoint(className, subjectName, language)).then(r =>
-            r.json(),
-          ),
-        ),
-      );
+      const cacheKey = `@edu_content_avail_${className}_${subjectName}_${language}`;
 
-      const next = {};
-      results.forEach((result, i) => {
-        next[ALL_OPTIONS[i].label] =
-          result.status === 'fulfilled' &&
-          Array.isArray(result.value.data) &&
-          result.value.data.length > 0;
-      });
-      setAvailable(next);
-      setLoading(false);
+      // Show cached availability immediately so the user isn't stuck on a spinner
+      const cached = await getCachedList(cacheKey);
+      if (cached) {
+        setAvailable(cached);
+        setLoading(false);
+      }
+
+      // Fetch fresh data; only update if at least one request succeeds
+      try {
+        const results = await Promise.allSettled(
+          ALL_OPTIONS.map(opt =>
+            fetch(opt.endpoint(className, subjectName, language)).then(r =>
+              r.json(),
+            ),
+          ),
+        );
+
+        const allFailed = results.every(r => r.status === 'rejected');
+        if (!allFailed) {
+          const next = {};
+          results.forEach((result, i) => {
+            next[ALL_OPTIONS[i].label] =
+              result.status === 'fulfilled' &&
+              Array.isArray(result.value.data) &&
+              result.value.data.length > 0;
+          });
+          setAvailable(next);
+          await saveCachedList(cacheKey, next);
+        }
+      } finally {
+        setLoading(false);
+      }
     };
 
     checkAvailability();

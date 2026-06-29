@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import {
   View,
   Text,
@@ -12,6 +12,13 @@ import {
   TouchableOpacity,
 } from 'react-native';
 import { WebView } from 'react-native-webview';
+import FileViewer from 'react-native-file-viewer';
+import {
+  getCachedList,
+  saveCachedList,
+  getLocalPath,
+  downloadFile,
+} from '../../utils/offlineCache';
 
 const makePdfViewerHtml = url => {
   const safeUrl = JSON.stringify(url);
@@ -87,43 +94,74 @@ const makePdfViewerHtml = url => {
 export default function PdfListScreen({ className, subjectName, language }) {
   const [pdfs, setPdfs] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [isOffline, setIsOffline] = useState(false);
   const [activePdf, setActivePdf] = useState(null);
+  const inProgress = useRef(new Set());
+
+  const cacheKey = `@edu_pdfs_${className}_${subjectName}_${language}`;
 
   useEffect(() => {
-    const fetchPdfs = async () => {
+    const load = async () => {
       setLoading(true);
+      let items = null;
+      let offline = false;
+
+      // Serve cache immediately so offline users aren't stuck on a spinner
+      const cachedItems = await getCachedList(cacheKey);
+      if (cachedItems) {
+        items = cachedItems;
+        offline = true;
+        setPdfs(items);
+        setIsOffline(true);
+        setLoading(false);
+      }
+
       try {
         const url = `https://iqsharp.arvinfocom.com/eduapiapp/api/main/getPdfs?class_id=${className}&subject_id=${subjectName}&lang=${language}`;
         const res = await fetch(url);
         const json = await res.json();
-        if (json.data?.length > 0) {
-          console.log('[PDF] sample pdf_url:', json.data[0].pdf_url);
-        } else {
-          console.log('[PDF] API returned empty data');
-        }
-        setPdfs(
-          json.data?.map(item => ({
-            id: item.pdf_id,
-            title: item.pdf_title,
-            desc: item.pdf_description,
-            url: item.pdf_url,
-          })) || [],
-        );
-      } catch (err) {
-        console.log('PDF fetch error', err);
-        setPdfs([]);
-      } finally {
-        setLoading(false);
+        items = (json.data || []).map(item => ({
+          id: item.pdf_id,
+          title: item.pdf_title,
+          desc: item.pdf_description,
+          url: item.pdf_url,
+        }));
+        await saveCachedList(cacheKey, items);
+        offline = false;
+      } catch {
+        if (!cachedItems) items = null;
       }
+
+      setPdfs(items || []);
+      setIsOffline(offline);
+      setLoading(false);
     };
-    fetchPdfs();
+    load();
   }, [className, subjectName, language]);
 
-  const openPdf = item => {
-    setActivePdf(item.url ? item : { ...item, noUrl: true });
+  const cacheInBackground = url => {
+    if (!url || inProgress.current.has(url)) return;
+    inProgress.current.add(url);
+    downloadFile(url)
+      .catch(() => {})
+      .finally(() => inProgress.current.delete(url));
   };
 
-  const closePdf = () => setActivePdf(null);
+  const openPdf = async item => {
+    if (!item.url) {
+      setActivePdf({ ...item, noUrl: true });
+      return;
+    }
+    const local = await getLocalPath(item.url);
+    if (local) {
+      FileViewer.open(local, { showOpenWithDialog: false }).catch(() =>
+        FileViewer.open(local, { showOpenWithDialog: true }),
+      );
+    } else {
+      setActivePdf(item);
+      cacheInBackground(item.url);
+    }
+  };
 
   const renderItem = ({ item }) => (
     <TouchableHighlight
@@ -155,11 +193,7 @@ export default function PdfListScreen({ className, subjectName, language }) {
 
   if (loading) {
     return (
-      <ActivityIndicator
-        size="large"
-        color="#007bff"
-        style={{ marginTop: 40 }}
-      />
+      <ActivityIndicator size="large" color="#007bff" style={{ marginTop: 40 }} />
     );
   }
 
@@ -168,6 +202,13 @@ export default function PdfListScreen({ className, subjectName, language }) {
   return (
     <View style={styles.container}>
       <Text style={styles.title}>Available PDFs</Text>
+      {isOffline && (
+        <View style={styles.offlineBanner}>
+          <Text style={styles.offlineBannerText}>
+            You're offline — showing previously loaded content
+          </Text>
+        </View>
+      )}
       <FlatList
         data={pdfs}
         renderItem={renderItem}
@@ -185,20 +226,20 @@ export default function PdfListScreen({ className, subjectName, language }) {
       <Modal
         visible={!!activePdf}
         animationType="slide"
-        onRequestClose={closePdf}>
+        onRequestClose={() => setActivePdf(null)}>
         <SafeAreaView style={styles.modalContainer}>
           <View style={styles.modalHeader}>
-            <TouchableOpacity onPress={closePdf} style={styles.closeBtn}>
+            <TouchableOpacity
+              onPress={() => setActivePdf(null)}
+              style={styles.closeBtn}>
               <Text style={styles.closeBtnText}>✕ Close</Text>
             </TouchableOpacity>
           </View>
-
           {activePdf && (
             <Text style={styles.modalTitle} numberOfLines={1}>
               {activePdf.title}
             </Text>
           )}
-
           {activePdf?.noUrl ? (
             <View style={styles.noUrlBox}>
               <Text style={styles.noUrlText}>
@@ -230,6 +271,16 @@ const styles = StyleSheet.create({
     marginBottom: 12,
     textAlign: 'center',
   },
+  offlineBanner: {
+    backgroundColor: '#fff3cd',
+    borderLeftWidth: 4,
+    borderLeftColor: '#f59e0b',
+    marginHorizontal: 16,
+    marginBottom: 8,
+    padding: 10,
+    borderRadius: 6,
+  },
+  offlineBannerText: { fontSize: 12, color: '#92400e' },
   card: {
     backgroundColor: '#fff',
     padding: 10,
@@ -238,10 +289,7 @@ const styles = StyleSheet.create({
     borderRadius: 10,
     elevation: 4,
   },
-  cardInner: {
-    flexDirection: 'row',
-    alignItems: 'center',
-  },
+  cardInner: { flexDirection: 'row', alignItems: 'center' },
   pdfPreviewBox: {
     width: 64,
     height: 52,
@@ -261,10 +309,7 @@ const styles = StyleSheet.create({
     paddingVertical: 2,
   },
   pdfBadgeText: { color: '#fff', fontSize: 10, fontWeight: 'bold' },
-  cardText: {
-    flex: 1,
-    paddingLeft: 12,
-  },
+  cardText: { flex: 1, paddingLeft: 12 },
   pdfTitle: {
     fontSize: 14,
     fontWeight: '600',
