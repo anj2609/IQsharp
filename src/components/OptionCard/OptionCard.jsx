@@ -1,12 +1,14 @@
 // components/OptionCard.js
 import React from 'react';
-import { TouchableOpacity, Text, StyleSheet, View, Image } from 'react-native';
+import { TouchableOpacity, Text, StyleSheet, View, Image, Dimensions } from 'react-native';
+
+const { width: screenWidth } = Dimensions.get('window');
 
 export default function OptionCard({ label, icon, onPress }) {
   return (
     <TouchableOpacity style={styles.card} onPress={onPress}>
       <View style={styles.previewBox}>
-        <Image source={icon} style={styles.icon} resizeMode="cover" />
+        <Image source={icon} style={styles.icon} resizeMode="contain" />
       </View>
       <Text style={styles.text}>{label}</Text>
       <Text style={styles.arrow}>&#8250;</Text>
@@ -23,7 +25,7 @@ const styles = StyleSheet.create({
     elevation: 4,
     flexDirection: 'row',
     alignItems: 'center',
-    width: 340,
+    width: screenWidth - 40,
   },
   previewBox: {
     width: 90,
@@ -32,6 +34,8 @@ const styles = StyleSheet.create({
     overflow: 'hidden',
     marginRight: 14,
     backgroundColor: '#f0f0f0',
+    justifyContent: 'center',
+    alignItems: 'center',
   },
   icon: {
     width: '100%',

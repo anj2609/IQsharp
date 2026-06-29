@@ -15,22 +15,36 @@ import { WebView } from 'react-native-webview';
 
 const { width, height } = Dimensions.get('window');
 
-const VideoThumbnail = ({ uri, onPress }) => {
-  // Start in error state immediately if URI is null/empty — avoids infinite loading
+const makeThumbnailHtml = uri => {
+  const safeUri = JSON.stringify(uri);
+  return `<!DOCTYPE html><html><head><meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1"><style>*{margin:0;padding:0;box-sizing:border-box}html,body{width:100%;height:100%;overflow:hidden;background:#1a1a2e}video{width:100%;height:100%;object-fit:cover;display:block}</style></head><body><video id="v" muted playsinline webkit-playsinline preload="auto"></video><script>var v=document.getElementById('v');v.src=${safeUri};v.addEventListener('loadeddata',function(){v.currentTime=0;v.pause();});v.play().catch(function(){});<\/script></body></html>`;
+};
+
+const VideoThumbnail = ({ uri, videoUri, onPress }) => {
   const [imgError, setImgError] = useState(!uri);
   return (
     <TouchableOpacity onPress={onPress} style={styles.thumbnailWrapper}>
-      {imgError ? (
-        <View style={styles.thumbPlaceholder}>
-          <Text style={styles.thumbPlaceholderText}>▶</Text>
-        </View>
-      ) : (
+      {!imgError ? (
         <Image
           source={{ uri }}
           style={styles.thumbnail}
           resizeMode="cover"
           onError={() => setImgError(true)}
         />
+      ) : videoUri ? (
+        <View pointerEvents="none" style={styles.thumbnail}>
+          <WebView
+            source={{ html: makeThumbnailHtml(videoUri) }}
+            style={{ flex: 1 }}
+            scrollEnabled={false}
+            javaScriptEnabled
+            mediaPlaybackRequiresUserAction={false}
+          />
+        </View>
+      ) : (
+        <View style={styles.thumbPlaceholder}>
+          <Text style={styles.thumbPlaceholderText}>▶</Text>
+        </View>
       )}
       <View style={styles.playOverlay}>
         <Text style={styles.playLabel}>▶ Play</Text>
@@ -75,7 +89,7 @@ export default function VideoListScreen({ className, subjectName, language }) {
       <View style={styles.card}>
         <VideoThumbnail
           uri={item.thumbnail_url}
-          title={item.video_title}
+          videoUri={item.video_url}
           onPress={() => setActiveVideo(item)}
         />
         <View style={styles.cardText}>
